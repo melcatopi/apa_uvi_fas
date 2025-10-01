@@ -1,0 +1,316 @@
+おっけー!学習目的なら全然アリ〜!むしろ仕組み理解するには最高だよね💪
+
+じゃあ、ちゃんと動くやつ作ってみよっか!標準ライブラリだけでガチで実装するとこんな感じ:
+
+```javascript
+const crypto = require('crypto');
+const http = require('http');
+const url = require('url');
+
+// ========== ユーザーとセッションのストレージ ==========
+// 本番ならDBだけど、学習用だからMapで
+const users = new Map();
+const sessions = new Map();
+const refreshTokens = new Map();
+
+// ========== パスワード関連 ==========
+function hashPassword(password, salt) {
+  // PBKDF2で安全にハッシュ化
+  return crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+}
+
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+// ========== トークン生成 ==========
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// ========== ユーザー登録 ==========
+function register(username, password, role = 'user') {
+  if (users.has(username)) {
+    return { success: false, error: 'ユーザー既に存在してる!' };
+  }
+  
+  const salt = generateSalt();
+  const hash = hashPassword(password, salt);
+  
+  users.set(username, {
+    username,
+    salt,
+    hash,
+    role, // 認可用
+    createdAt: new Date()
+  });
+  
+  return { success: true, message: 'ユーザー登録完了!' };
+}
+
+// ========== ログイン ==========
+function login(username, password) {
+  const user = users.get(username);
+  
+  if (!user) {
+    return { success: false, error: 'ユーザー見つからない' };
+  }
+  
+  const hash = hashPassword(password, user.salt);
+  
+  if (hash !== user.hash) {
+    return { success: false, error: 'パスワード間違ってるよ!' };
+  }
+  
+  // アクセストークン(短命)
+  const accessToken = generateToken();
+  // リフレッシュトークン(長命)
+  const refreshToken = generateToken();
+  
+  sessions.set(accessToken, {
+    username,
+    role: user.role,
+    expires: Date.now() + 15 * 60 * 1000 // 15分
+  });
+  
+  refreshTokens.set(refreshToken, {
+    username,
+    expires: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7日
+  });
+  
+  return {
+    success: true,
+    accessToken,
+    refreshToken
+  };
+}
+
+// ========== トークンリフレッシュ ==========
+function refresh(refreshToken) {
+  const tokenData = refreshTokens.get(refreshToken);
+  
+  if (!tokenData || tokenData.expires < Date.now()) {
+    refreshTokens.delete(refreshToken);
+    return { success: false, error: 'リフレッシュトークン無効!' };
+  }
+  
+  const user = users.get(tokenData.username);
+  const newAccessToken = generateToken();
+  
+  sessions.set(newAccessToken, {
+    username: user.username,
+    role: user.role,
+    expires: Date.now() + 15 * 60 * 1000
+  });
+  
+  return {
+    success: true,
+    accessToken: newAccessToken
+  };
+}
+
+// ========== 認証チェック ==========
+function authenticate(token) {
+  const session = sessions.get(token);
+  
+  if (!session) {
+    return { authenticated: false, error: '認証必要だよ!' };
+  }
+  
+  if (session.expires < Date.now()) {
+    sessions.delete(token);
+    return { authenticated: false, error: 'トークン期限切れ!' };
+  }
+  
+  return {
+    authenticated: true,
+    user: {
+      username: session.username,
+      role: session.role
+    }
+  };
+}
+
+// ========== 認可チェック(ロールベース) ==========
+function authorize(token, requiredRole) {
+  const auth = authenticate(token);
+  
+  if (!auth.authenticated) {
+    return { authorized: false, error: auth.error };
+  }
+  
+  const roleHierarchy = {
+    'admin': 3,
+    'moderator': 2,
+    'user': 1
+  };
+  
+  const userRoleLevel = roleHierarchy[auth.user.role] || 0;
+  const requiredRoleLevel = roleHierarchy[requiredRole] || 0;
+  
+  if (userRoleLevel < requiredRoleLevel) {
+    return { authorized: false, error: '権限ないよ!' };
+  }
+  
+  return { authorized: true, user: auth.user };
+}
+
+// ========== ログアウト ==========
+function logout(token) {
+  sessions.delete(token);
+  return { success: true };
+}
+
+// ========== HTTPサーバー ==========
+const server = http.createServer((req, res) => {
+  const parsedUrl = url.parse(req.url, true);
+  const path = parsedUrl.pathname;
+  
+  // CORS対応(学習用)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+  
+  // レスポンスヘルパー
+  const sendJSON = (statusCode, data) => {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data));
+  };
+  
+  // リクエストボディ取得
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const data = body ? JSON.parse(body) : {};
+      
+      // ========== エンドポイント ==========
+      
+      // ユーザー登録
+      if (path === '/register' && req.method === 'POST') {
+        const result = register(data.username, data.password, data.role);
+        sendJSON(result.success ? 201 : 400, result);
+      }
+      
+      // ログイン
+      else if (path === '/login' && req.method === 'POST') {
+        const result = login(data.username, data.password);
+        sendJSON(result.success ? 200 : 401, result);
+      }
+      
+      // トークンリフレッシュ
+      else if (path === '/refresh' && req.method === 'POST') {
+        const result = refresh(data.refreshToken);
+        sendJSON(result.success ? 200 : 401, result);
+      }
+      
+      // ログアウト
+      else if (path === '/logout' && req.method === 'POST') {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        const result = logout(token);
+        sendJSON(200, result);
+      }
+      
+      // 保護されたエンドポイント(認証のみ)
+      else if (path === '/profile' && req.method === 'GET') {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        const auth = authenticate(token);
+        
+        if (!auth.authenticated) {
+          sendJSON(401, { error: auth.error });
+        } else {
+          const user = users.get(auth.user.username);
+          sendJSON(200, {
+            username: user.username,
+            role: user.role,
+            createdAt: user.createdAt
+          });
+        }
+      }
+      
+      // 管理者専用エンドポイント(認可)
+      else if (path === '/admin' && req.method === 'GET') {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        const authz = authorize(token, 'admin');
+        
+        if (!authz.authorized) {
+          sendJSON(403, { error: authz.error });
+        } else {
+          sendJSON(200, {
+            message: '管理者エリアへようこそ!',
+            allUsers: Array.from(users.keys())
+          });
+        }
+      }
+      
+      else {
+        sendJSON(404, { error: 'エンドポイント見つからない' });
+      }
+      
+    } catch (err) {
+      sendJSON(400, { error: '不正なリクエスト' });
+    }
+  });
+});
+
+// ========== 期限切れトークンのクリーンアップ ==========
+setInterval(() => {
+  const now = Date.now();
+  
+  for (const [token, session] of sessions.entries()) {
+    if (session.expires < now) {
+      sessions.delete(token);
+    }
+  }
+  
+  for (const [token, data] of refreshTokens.entries()) {
+    if (data.expires < now) {
+      refreshTokens.delete(token);
+    }
+  }
+}, 60000); // 1分ごと
+
+// サーバー起動
+server.listen(3000, () => {
+  console.log('サーバー起動したよ! http://localhost:3000');
+  
+  // テスト用ユーザー作成
+  register('user1', 'password123', 'user');
+  register('admin1', 'admin123', 'admin');
+  console.log('テストユーザー作成完了!');
+});
+```
+
+## 使い方
+
+サーバー起動したら、curlとかPostmanで試せるよ!
+
+```bash
+# ログイン
+curl -X POST http://localhost:3000/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"user1","password":"password123"}'
+
+# プロフィール取得(認証必要)
+curl http://localhost:3000/profile \
+  -H "Authorization: Bearer <accessToken>"
+
+# 管理者エリア(認可必要)
+curl http://localhost:3000/admin \
+  -H "Authorization: Bearer <adminのaccessToken>"
+```
+
+## ポイント解説
+
+1. **認証(Authentication)**: ユーザーが誰かを確認
+2. **認可(Authorization)**: そのユーザーに権限あるか確認
+3. **アクセストークン**: 短命(15分)で頻繁に使う
+4. **リフレッシュトークン**: 長命(7日)で新しいアクセストークン取得用
+
+どう?わかんないとこある?もっと詳しく説明が欲しい部分教えて〜!😊
