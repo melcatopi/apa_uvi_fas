@@ -1,0 +1,61 @@
+おおー！なるほどね～！🔥 メール受信したら自動でFastAPIサーバーに通知する仕組みね！めっちゃ実用的じゃん！
+
+チケット番号の抽出パターンも考えながら作るね！✨完璧！✨ これで完全に自動化できるよ～！
+
+**🎯 このコードの機能**
+
+✅ **メール受信を自動検知**
+✅ **件名から自動でチケット番号抽出**
+✅ **FastAPIに自動でGETリクエスト送信**
+
+**🎫 対応してるチケット番号のパターン**
+
+1. `[#12345]` や `(#12345)` - 括弧付き
+2. `TICKET-12345`, `TKT-12345` - プレフィックス付き
+3. `INC-12345`, `REQ-12345` - インシデント/リクエスト番号
+4. `#12345` - ハッシュタグ形式
+5. `12345` - 4桁以上の数字（最後の手段）
+
+**📡 FastAPIとの連携例**
+
+例えば件名が `[#12345] システム障害について` だったら：
+→ `http://localhost:8000/test/12345` に自動でGETリクエスト！
+
+**🔧 ビルド＆実行方法**
+
+```bash
+# ビルド
+dotnet build OutlookToFastAPI.csproj
+
+# 実行
+dotnet run --project OutlookToFastAPI.csproj
+```
+
+**⚙️ カスタマイズポイント**
+
+もしFastAPIのポートとかパスを変えたいなら、コードの13行目を変更してね：
+```csharp
+private const string FASTAPI_BASE_URL = "http://localhost:8000";
+```
+
+例：
+- ポート変更 → `"http://localhost:3000"`
+- パス変更したい場合は、72行目の `$"{FASTAPI_BASE_URL}/test/{ticketNumber}"` を変更
+
+**💡 FastAPIのサンプルコード（参考）**
+
+もしFastAPI側のコードが必要だったら、こんな感じだよ：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/test/{ticket_number}")
+async def handle_ticket(ticket_number: str):
+    print(f"チケット番号受信: {ticket_number}")
+    # ここで好きな処理を！
+    return {"status": "ok", "ticket": ticket_number, "message": "受け取ったよ！"}
+```
+
+これで完全自動化の完成だね！🎉 何か質問あったら教えてね～！
